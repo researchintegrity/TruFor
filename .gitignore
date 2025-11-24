@@ -127,3 +127,9 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Docker specific
+docker/images
+docker/output
+docker/data_test
+*.zip
