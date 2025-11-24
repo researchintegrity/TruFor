@@ -2,8 +2,8 @@ import sys
 import os
 import argparse
 import time
-import signal
 import logging
+import multiprocessing
 import numpy as np
 import torch
 from torch.nn import functional as F
@@ -24,13 +24,12 @@ from config import _C as config
 from data_core import myDataset
 
 # Setup logging
-logging.basicConfig(level=logging.INFO, format='%(message)s')
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
 logger = logging.getLogger(__name__)
-
-def signal_handler(signum, frame):
-    print("[STATUS] TIMEOUT", flush=True)
-    logger.error("Timeout reached. Exiting.")
-    sys.exit(1)
 
 def save_visualization(rgb_path, pred_map, conf_map, output_path):
     """
@@ -71,25 +70,8 @@ def save_visualization(rgb_path, pred_map, conf_map, output_path):
         logger.error(f"Error saving visualization: {e}")
         return False
 
-def main():
-    parser = argparse.ArgumentParser(description='Run TruFor Detection')
-    parser.add_argument('-gpu', '--gpu', type=int, default=0, help='device, use -1 for cpu')
-    parser.add_argument('-in', '--input', type=str, required=True, help='input image path')
-    parser.add_argument('-out', '--output', type=str, default='../output', help='output folder')
-    parser.add_argument('--timeout', type=int, default=0, help='timeout in seconds')
-    parser.add_argument('opts', help="other options", default=None, nargs=argparse.REMAINDER)
-    
-    args = parser.parse_args()
-    
-    # Set timeout if specified
-    if args.timeout > 0:
-        signal.signal(signal.SIGALRM, signal_handler)
-        signal.alarm(args.timeout)
-    
-    print("[STATUS] INITIALIZING", flush=True)
-    
-    # Update config
-    update_config(config, args)
+def run_detection_worker(args, config):
+    logger.info("[STATUS] INITIALIZING")
     
     device = 'cuda:%d' % args.gpu if args.gpu >= 0 else 'cpu'
     
@@ -101,7 +83,7 @@ def main():
         os.makedirs(output_dir)
         
     # Load Model
-    print("[STATUS] LOADING_MODEL", flush=True)
+    logger.info("[STATUS] LOADING_MODEL")
     
     if config.TEST.MODEL_FILE:
         model_state_file = config.TEST.MODEL_FILE
@@ -127,7 +109,7 @@ def main():
         sys.exit(1)
 
     # Process Image
-    print("[STATUS] PROCESSING_IMAGE", flush=True)
+    logger.info("[STATUS] PROCESSING_IMAGE")
     
     try:
         # We use myDataset to handle loading and preprocessing
@@ -159,19 +141,50 @@ def main():
                 output_filename = f"{basename}_trufor_result.png"
                 output_path = os.path.join(output_dir, output_filename)
                 
-                print("[STATUS] SAVING_RESULTS", flush=True)
+                logger.info("[STATUS] SAVING_RESULTS")
                 
                 # Save Visualization
                 if save_visualization(input_path, pred, conf, output_path):
-                    print(f"[STATUS] COMPLETED {output_filename}", flush=True)
+                    logger.info(f"[STATUS] COMPLETED {output_filename}")
                 else:
-                    print("[STATUS] FAILED_VISUALIZATION", flush=True)
+                    logger.info("[STATUS] FAILED_VISUALIZATION")
                     
     except Exception as e:
-        logger.error(f"Error during processing: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error during processing: {e}", exc_info=True)
         sys.exit(1)
+
+def main():
+    parser = argparse.ArgumentParser(description='Run TruFor Detection')
+    parser.add_argument('-gpu', '--gpu', type=int, default=0, help='device, use -1 for cpu')
+    parser.add_argument('-in', '--input', type=str, required=True, help='input image path')
+    parser.add_argument('-out', '--output', type=str, default='../output', help='output folder')
+    parser.add_argument('--timeout', type=int, default=0, help='timeout in seconds')
+    parser.add_argument('opts', help="other options", default=None, nargs=argparse.REMAINDER)
+    
+    args = parser.parse_args()
+    
+    # Update config
+    update_config(config, args)
+    
+    if args.timeout > 0:
+        # Use spawn to be safe with CUDA/PyTorch
+        try:
+            multiprocessing.set_start_method('spawn', force=True)
+        except RuntimeError:
+            pass
+            
+        p = multiprocessing.Process(target=run_detection_worker, args=(args, config))
+        p.start()
+        p.join(args.timeout)
+        
+        if p.is_alive():
+            logger.info("[STATUS] TIMEOUT")
+            logger.error(f"Detection timed out after {args.timeout} seconds. Terminating process.")
+            p.terminate()
+            p.join()
+            sys.exit(1)
+    else:
+        run_detection_worker(args, config)
 
 if __name__ == '__main__':
     main()
