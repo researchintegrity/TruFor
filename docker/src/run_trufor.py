@@ -31,40 +31,36 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def save_visualization(rgb_path, pred_map, conf_map, output_path):
+def save_visualization(pred_map, conf_map, pred_map_path, conf_map_path):
     """
-    Save a visualization of the results.
-    Generates a composite image with Original, Localization Map, and Confidence Map.
+    Save prediction map and confidence map as separate images.
+    
+    Args:
+        pred_map: The prediction/localization map array
+        conf_map: The confidence map array
+        pred_map_path: Output path for the prediction map image
+        conf_map_path: Output path for the confidence map image
+    
+    Returns:
+        True if both images saved successfully, False otherwise
     """
     try:
-        # Load original image
-        img = Image.open(rgb_path).convert('RGB')
-        
-        # Create figure
-        # Adjust figsize as needed
-        fig, axs = plt.subplots(1, 3, figsize=(15, 5))
-        
-        # Original Image
-        axs[0].imshow(img)
-        axs[0].set_title('Original Image')
-        axs[0].axis('off')
-        
-        # Localization Map
-        # Using RdBu_r colormap as in visualize.py
-        # We resize the map to match the image for better display if needed, 
-        # but imshow handles different sizes in subplots fine.
-        axs[1].imshow(pred_map, cmap='RdBu_r', vmin=0, vmax=1)
-        axs[1].set_title('Localization Map')
-        axs[1].axis('off')
-        
-        # Confidence Map
-        axs[2].imshow(conf_map, cmap='gray', vmin=0, vmax=1)
-        axs[2].set_title('Confidence Map')
-        axs[2].axis('off')
-        
+        # Save Prediction/Localization Map
+        fig_pred, ax_pred = plt.subplots(figsize=(8, 8))
+        ax_pred.imshow(pred_map, cmap='RdBu_r', vmin=0, vmax=1)
+        ax_pred.axis('off')
         plt.tight_layout()
-        plt.savefig(output_path, bbox_inches='tight', dpi=150)
-        plt.close(fig)
+        plt.savefig(pred_map_path, bbox_inches='tight', dpi=150)
+        plt.close(fig_pred)
+        
+        # Save Confidence Map
+        fig_conf, ax_conf = plt.subplots(figsize=(8, 8))
+        ax_conf.imshow(conf_map, cmap='gray', vmin=0, vmax=1)
+        ax_conf.axis('off')
+        plt.tight_layout()
+        plt.savefig(conf_map_path, bbox_inches='tight', dpi=150)
+        plt.close(fig_conf)
+        
         return True
     except Exception as e:
         logger.error(f"Error saving visualization: {e}")
@@ -135,17 +131,19 @@ def run_detection_worker(args, config):
                 pred = F.softmax(pred, dim=0)[1]
                 pred = pred.cpu().numpy()
                 
-                # Generate Output Filename
+                # Generate Output Filenames
                 filename = os.path.basename(input_path)
                 basename = os.path.splitext(filename)[0]
-                output_filename = f"{basename}_trufor_result.png"
-                output_path = os.path.join(output_dir, output_filename)
+                pred_map_filename = f"{basename}_pred_map.png"
+                conf_map_filename = f"{basename}_conf_map.png"
+                pred_map_path = os.path.join(output_dir, pred_map_filename)
+                conf_map_path = os.path.join(output_dir, conf_map_filename)
                 
                 logger.info("[STATUS] SAVING_RESULTS")
                 
                 # Save Visualization
-                if save_visualization(input_path, pred, conf, output_path):
-                    logger.info(f"[STATUS] COMPLETED {output_filename}")
+                if save_visualization(pred, conf, pred_map_path, conf_map_path):
+                    logger.info(f"[STATUS] COMPLETED {pred_map_filename}, {conf_map_filename}")
                 else:
                     logger.info("[STATUS] FAILED_VISUALIZATION")
                     
