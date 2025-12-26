@@ -31,35 +31,39 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def save_visualization(pred_map, conf_map, pred_map_path, conf_map_path):
+def save_visualization(pred_map, conf_map, pred_map_path, conf_map_path, original_size):
     """
-    Save prediction map and confidence map as separate images.
+    Save prediction map and confidence map as separate images with the same size as the original.
     
     Args:
-        pred_map: The prediction/localization map array
-        conf_map: The confidence map array
+        pred_map: The prediction/localization map array (values 0-1)
+        conf_map: The confidence map array (values 0-1)
         pred_map_path: Output path for the prediction map image
         conf_map_path: Output path for the confidence map image
+        original_size: Tuple (width, height) of the original image
     
     Returns:
         True if both images saved successfully, False otherwise
     """
     try:
-        # Save Prediction/Localization Map
-        fig_pred, ax_pred = plt.subplots(figsize=(8, 8))
-        ax_pred.imshow(pred_map, cmap='RdBu_r', vmin=0, vmax=1)
-        ax_pred.axis('off')
-        plt.tight_layout()
-        plt.savefig(pred_map_path, bbox_inches='tight', dpi=150)
-        plt.close(fig_pred)
+        # Apply RdBu_r colormap to prediction map
+        # RdBu_r: 0 = blue, 0.5 = white, 1 = red
+        cmap = plt.get_cmap('RdBu_r')
+        pred_colored = cmap(pred_map)  # Returns RGBA array with values 0-1
+        pred_colored = (pred_colored[:, :, :3] * 255).astype(np.uint8)  # Convert to RGB uint8
         
-        # Save Confidence Map
-        fig_conf, ax_conf = plt.subplots(figsize=(8, 8))
-        ax_conf.imshow(conf_map, cmap='gray', vmin=0, vmax=1)
-        ax_conf.axis('off')
-        plt.tight_layout()
-        plt.savefig(conf_map_path, bbox_inches='tight', dpi=150)
-        plt.close(fig_conf)
+        # Create PIL Image and resize to original dimensions
+        pred_img = Image.fromarray(pred_colored, mode='RGB')
+        pred_img = pred_img.resize(original_size, Image.BILINEAR)
+        pred_img.save(pred_map_path)
+        
+        # Convert confidence map to grayscale uint8
+        conf_gray = (conf_map * 255).astype(np.uint8)
+        
+        # Create PIL Image and resize to original dimensions
+        conf_img = Image.fromarray(conf_gray, mode='L')
+        conf_img = conf_img.resize(original_size, Image.BILINEAR)
+        conf_img.save(conf_map_path)
         
         return True
     except Exception as e:
@@ -139,10 +143,14 @@ def run_detection_worker(args, config):
                 pred_map_path = os.path.join(output_dir, pred_map_filename)
                 conf_map_path = os.path.join(output_dir, conf_map_filename)
                 
+                # Get original image size for output
+                original_img = Image.open(input_path)
+                original_size = original_img.size  # (width, height)
+                
                 logger.info("[STATUS] SAVING_RESULTS")
                 
                 # Save Visualization
-                if save_visualization(pred, conf, pred_map_path, conf_map_path):
+                if save_visualization(pred, conf, pred_map_path, conf_map_path, original_size):
                     logger.info(f"[STATUS] COMPLETED {pred_map_filename}, {conf_map_filename}")
                 else:
                     logger.info("[STATUS] FAILED_VISUALIZATION")
