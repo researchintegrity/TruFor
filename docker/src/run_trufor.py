@@ -31,9 +31,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def save_visualization(pred_map, conf_map, pred_map_path, conf_map_path, original_size):
+def save_visualization(pred_map, conf_map, pred_map_path, conf_map_path, original_size, noiseprint=None, noiseprint_path=None):
     """
     Save prediction map and confidence map as separate images with the same size as the original.
+    Optionally save the noiseprint map.
     
     Args:
         pred_map: The prediction/localization map array (values 0-1)
@@ -41,9 +42,11 @@ def save_visualization(pred_map, conf_map, pred_map_path, conf_map_path, origina
         pred_map_path: Output path for the prediction map image
         conf_map_path: Output path for the confidence map image
         original_size: Tuple (width, height) of the original image
+        noiseprint: Optional noiseprint array to save
+        noiseprint_path: Optional output path for the noiseprint image
     
     Returns:
-        True if both images saved successfully, False otherwise
+        True if all images saved successfully, False otherwise
     """
     try:
         # Apply RdBu_r colormap to prediction map
@@ -65,6 +68,23 @@ def save_visualization(pred_map, conf_map, pred_map_path, conf_map_path, origina
         conf_img = conf_img.resize(original_size, Image.BILINEAR)
         conf_img.save(conf_map_path)
         
+        # Save noiseprint if provided
+        if noiseprint is not None and noiseprint_path is not None:
+            # Normalize noiseprint to 0-255 range for visualization
+            npp_min = noiseprint.min()
+            npp_max = noiseprint.max()
+            if npp_max > npp_min:
+                npp_normalized = (noiseprint - npp_min) / (npp_max - npp_min)
+            else:
+                npp_normalized = np.zeros_like(noiseprint)
+            npp_gray = (npp_normalized * 255).astype(np.uint8)
+            
+            # Create PIL Image and resize to original dimensions
+            npp_img = Image.fromarray(npp_gray, mode='L')
+            npp_img = npp_img.resize(original_size, Image.BILINEAR)
+            npp_img.save(noiseprint_path)
+            logger.info(f"Saved noiseprint to {noiseprint_path}")
+        
         return True
     except Exception as e:
         logger.error(f"Error saving visualization: {e}")
@@ -74,6 +94,11 @@ def run_detection_worker(args, config):
     logger.info("[STATUS] INITIALIZING")
     
     device = 'cuda:%d' % args.gpu if args.gpu >= 0 else 'cpu'
+    # Note: argparse converts --save-noiseprint to save_noiseprint
+    save_noiseprint = getattr(args, 'save_noiseprint', False)
+    
+    if save_noiseprint:
+        logger.info("Noiseprint saving enabled")
     
     # Setup input
     input_path = args.input
@@ -122,7 +147,7 @@ def run_detection_worker(args, config):
                 rgb = rgb.to(device)
                 
                 # Inference
-                # model returns: pred, conf, det, npp
+                # model returns: pred, conf, det, npp (noiseprint)
                 pred, conf, det, npp = model(rgb)
                 
                 # Process outputs
@@ -135,13 +160,24 @@ def run_detection_worker(args, config):
                 pred = F.softmax(pred, dim=0)[1]
                 pred = pred.cpu().numpy()
                 
+                # Process noiseprint if requested
+                npp_numpy = None
+                if save_noiseprint and npp is not None:
+                    npp = torch.squeeze(npp, 0)
+                    # Average across channels if multi-channel
+                    if npp.dim() > 2:
+                        npp = npp.mean(dim=0)
+                    npp_numpy = npp.cpu().numpy()
+                
                 # Generate Output Filenames
                 filename = os.path.basename(input_path)
                 basename = os.path.splitext(filename)[0]
                 pred_map_filename = f"{basename}_pred_map.png"
                 conf_map_filename = f"{basename}_conf_map.png"
+                noiseprint_filename = f"{basename}_noiseprint.png"
                 pred_map_path = os.path.join(output_dir, pred_map_filename)
                 conf_map_path = os.path.join(output_dir, conf_map_filename)
+                noiseprint_path = os.path.join(output_dir, noiseprint_filename) if save_noiseprint else None
                 
                 # Get original image size for output
                 original_img = Image.open(input_path)
@@ -149,9 +185,13 @@ def run_detection_worker(args, config):
                 
                 logger.info("[STATUS] SAVING_RESULTS")
                 
-                # Save Visualization
-                if save_visualization(pred, conf, pred_map_path, conf_map_path, original_size):
-                    logger.info(f"[STATUS] COMPLETED {pred_map_filename}, {conf_map_filename}")
+                # Save Visualization (including noiseprint if requested)
+                if save_visualization(pred, conf, pred_map_path, conf_map_path, original_size, 
+                                     noiseprint=npp_numpy, noiseprint_path=noiseprint_path):
+                    output_files = f"{pred_map_filename}, {conf_map_filename}"
+                    if save_noiseprint:
+                        output_files += f", {noiseprint_filename}"
+                    logger.info(f"[STATUS] COMPLETED {output_files}")
                 else:
                     logger.info("[STATUS] FAILED_VISUALIZATION")
                     
@@ -165,6 +205,8 @@ def main():
     parser.add_argument('-in', '--input', type=str, required=True, help='input image path')
     parser.add_argument('-out', '--output', type=str, default='../output', help='output folder')
     parser.add_argument('--timeout', type=int, default=0, help='timeout in seconds')
+    parser.add_argument('--save-noiseprint', action='store_true', default=False,
+                        help='Save the noiseprint map as an additional output')
     parser.add_argument('opts', help="other options", default=None, nargs=argparse.REMAINDER)
     
     args = parser.parse_args()
